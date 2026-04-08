@@ -4,7 +4,29 @@ import cors from 'cors';
 import Anthropic from '@anthropic-ai/sdk';
 import { buildIndex, retrieve, formatContext, getStats } from './rag.js';
 import { register, login, googleAuth, requireAuth, type AuthRequest } from './auth.js';
-import { connectDB, Plan, Progress } from './db.js';
+import { connectDB, User, Plan, Progress } from './db.js';
+
+// ── Credit pricing (USD per million tokens) ──────────────────────────
+const PRICING: Record<string, { input: number; output: number }> = {
+  'claude-opus-4-6':  { input: 15.00, output: 75.00 },
+  'claude-haiku-4-5': { input: 0.80,  output: 4.00  },
+};
+
+function calcCost(model: string, inputTokens: number, outputTokens: number): number {
+  const p = PRICING[model] ?? PRICING['claude-opus-4-6'];
+  return (inputTokens * p.input + outputTokens * p.output) / 1_000_000;
+}
+
+async function checkCredits(userId: string): Promise<boolean> {
+  const user = await User.findById(userId).select('credits').lean();
+  return !!user && (user as any).credits > 0;
+}
+
+async function deductCredits(userId: string, cost: number): Promise<void> {
+  await User.findByIdAndUpdate(userId, {
+    $inc: { credits: -cost, creditsUsed: cost },
+  });
+}
 
 const app = express();
 app.use(cors());
@@ -187,9 +209,15 @@ Generate the training plan JSON now.`;
     ? `${PLAN_SYSTEM_PROMPT}\n\nRelevant fitness knowledge:\n${ragContext}`
     : PLAN_SYSTEM_PROMPT;
 
+  const authReq2 = req as AuthRequest;
+  if (!(await checkCredits(authReq2.userId!))) {
+    return res.status(402).json({ error: 'out_of_credits', message: 'You have used all your free credits. Please add more to continue.' });
+  }
+
   try {
+    const model = 'claude-haiku-4-5';
     const response = await anthropic.messages.create({
-      model: 'claude-haiku-4-5',
+      model,
       max_tokens: 8000,
       system: systemWithContext,
       messages: [{ role: 'user', content: profileSummary }],
@@ -214,15 +242,17 @@ Generate the training plan JSON now.`;
       plan.generatedAt = new Date().toISOString();
     }
 
+    const planCost = calcCost(model, response.usage.input_tokens, response.usage.output_tokens);
+    await deductCredits(authReq2.userId!, planCost);
+
     // Auto-save to MongoDB
-    const authReq = req as AuthRequest;
     await Plan.findOneAndUpdate(
-      { userId: authReq.userId },
-      { userId: authReq.userId, ...plan },
+      { userId: authReq2.userId },
+      { userId: authReq2.userId, ...plan },
       { upsert: true, new: true }
     );
     await Progress.findOneAndUpdate(
-      { userId: authReq.userId },
+      { userId: authReq2.userId },
       { userId: authReq.userId, completedDays: [] },
       { upsert: true }
     );
@@ -257,20 +287,39 @@ app.post('/api/chat/complete', requireAuth, async (req, res) => {
     ? `${SYSTEM_PROMPT}\n\n─── RELEVANT FITNESS KNOWLEDGE (retrieved for this query) ───\n${ragContext}\n─────────────────────────────────────────────────────────`
     : SYSTEM_PROMPT;
 
+  const authReq = req as AuthRequest;
+  if (!(await checkCredits(authReq.userId!))) {
+    return res.status(402).json({ error: 'out_of_credits', message: 'You have used all your free credits. Please add more to continue.' });
+  }
+
   try {
+    const model = 'claude-opus-4-6';
     const response = await anthropic.messages.create({
-      model: 'claude-opus-4-6',
+      model,
       max_tokens: 1024,
       system: systemWithContext,
       messages: messages.map(m => ({ role: m.role, content: m.content })),
     });
 
     const text = response.content[0].type === 'text' ? response.content[0].text : '';
+    const cost = calcCost(model, response.usage.input_tokens, response.usage.output_tokens);
+    await deductCredits(authReq.userId!, cost);
+
     res.json({ text });
   } catch (err: any) {
     console.error('Claude API error:', err);
     res.status(500).json({ error: err.message ?? 'Unknown error' });
   }
+});
+
+// GET /api/credits — user's credit balance
+app.get('/api/credits', requireAuth, async (req: AuthRequest, res) => {
+  const user = await User.findById(req.userId).select('credits creditsUsed').lean();
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  res.json({
+    credits: Math.max(0, parseFloat(((user as any).credits ?? 0).toFixed(4))),
+    creditsUsed: parseFloat(((user as any).creditsUsed ?? 0).toFixed(4)),
+  });
 });
 
 // GET /api/stats — RAG index info

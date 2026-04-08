@@ -13,11 +13,13 @@ export async function connectDB() {
 // ── User ─────────────────────────────────────────────────────────────
 
 const userSchema = new mongoose.Schema({
-  name:       { type: String, required: true },
-  email:      { type: String, required: true, unique: true, lowercase: true },
-  password:   { type: String },           // null for Google-only accounts
-  googleId:   { type: String, unique: true, sparse: true },
-  avatar:     { type: String },
+  name:        { type: String, required: true },
+  email:       { type: String, required: true, unique: true, lowercase: true },
+  password:    { type: String },           // null for Google-only accounts
+  googleId:    { type: String, unique: true, sparse: true },
+  avatar:      { type: String },
+  credits:     { type: Number, default: 5.00 },  // USD remaining
+  creditsUsed: { type: Number, default: 0.00 },  // USD spent total
 }, { timestamps: true });
 
 export const User = mongoose.model('User', userSchema);
