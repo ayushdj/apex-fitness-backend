@@ -8,8 +8,10 @@
 
 import { pipeline, type FeatureExtractionPipeline } from '@xenova/transformers';
 import { FITNESS_KNOWLEDGE } from './fitnessKnowledge.js';
+import { NUTRITION_KNOWLEDGE } from './nutritionKnowledge.js';
 
-const COLLECTION_NAME = 'fitness_knowledge_v1';
+// Bump version whenever knowledge base changes — forces re-index on next cold start
+const COLLECTION_NAME = 'fitness_knowledge_v2';
 const CHROMA_URL = process.env.CHROMA_URL ?? 'http://localhost:8000';
 const CHROMA_API = `${CHROMA_URL}/api/v2/tenants/default_tenant/databases/default_database`;
 const BATCH_SIZE = 50;
@@ -121,6 +123,13 @@ export async function buildIndex(): Promise<void> {
     texts.push(`${k.title}\n\n${k.content}`);
     metadatas.push({ type: 'knowledge', title: k.title, tags: k.tags.join(',') });
   }
+
+  for (const n of NUTRITION_KNOWLEDGE) {
+    ids.push(`nutrition-${n.id}`);
+    texts.push(`${n.title}\n\n${n.content}`);
+    metadatas.push({ type: 'nutrition', title: n.title, tags: n.tags.join(',') });
+  }
+  console.log(`✓ Prepared ${NUTRITION_KNOWLEDGE.length} nutrition knowledge chunks`);
 
   let exerciseCount = 0;
   try {

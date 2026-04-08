@@ -148,15 +148,16 @@ app.post('/api/plan/generate', requireAuth, async (req, res) => {
     userProfile.athleteIdentity,
     userProfile.goals,
     userProfile.schedule,
-    'training plan programming periodization progressive overload',
+    userProfile.diet,
+    'training plan programming periodization progressive overload nutrition meal plan',
   ].filter(Boolean).join(' ');
 
-  const relevantDocs = await retrieve(retrievalQuery, 5);
+  const relevantDocs = await retrieve(retrievalQuery, 10);
   const ragContext = formatContext(relevantDocs);
 
-  const PLAN_SYSTEM_PROMPT = `You are a JSON-only fitness plan generator. You MUST respond with a single valid JSON object and absolutely nothing else — no preamble, no explanation, no markdown fences, no comments. The response must be parseable by JSON.parse() without any preprocessing.
+  const PLAN_SYSTEM_PROMPT = `You are a JSON-only fitness and nutrition plan generator. You MUST respond with a single valid JSON object and absolutely nothing else — no preamble, no explanation, no markdown fences, no comments. The response must be parseable by JSON.parse() without any preprocessing.
 
-Generate a detailed 2-week training plan (the first 2 weeks of an 8-week program) based on the user profile provided.
+Generate a detailed 2-week training plan (the first 2 weeks of an 8-week program) AND a personalized meal plan based on the user profile provided.
 
 Return EXACTLY this JSON structure:
 {
@@ -185,7 +186,23 @@ Return EXACTLY this JSON structure:
         }
       ]
     }
-  ]
+  ],
+  "mealPlan": {
+    "dailyCalories": number,
+    "dietaryPattern": string,
+    "macros": { "proteinG": number, "carbsG": number, "fatG": number },
+    "meals": [
+      {
+        "name": string,
+        "timing": string,
+        "calories": number,
+        "proteinG": number,
+        "options": [string, string]
+      }
+    ],
+    "guidelines": [string, string, string],
+    "avoidList": [string]
+  }
 }
 
 Rules:
@@ -198,14 +215,20 @@ Rules:
 - coachTip must be non-empty for every day including rest days
 - programSummary must describe the full 8-week arc
 - generatedAt must be a valid ISO 8601 timestamp
-- Calibrate everything precisely to the user's experience level, equipment, injuries, and schedule`;
+- Calibrate everything precisely to the user's experience level, equipment, injuries, and schedule
+- mealPlan.dietaryPattern must reflect the user's diet (e.g. "omnivore", "vegetarian", "vegan", "pescatarian", "gluten-free")
+- mealPlan.meals must have 4-5 entries (Breakfast, Lunch, Dinner, Snack, optional Pre/Post-workout)
+- each meal's options array must have exactly 2 concrete food examples with calorie and protein info in parentheses
+- mealPlan.guidelines must have exactly 3 actionable nutrition tips specific to the user's goal and diet
+- mealPlan.avoidList: 3-5 foods or habits to minimize for this user's specific goal
+- ALL food recommendations must strictly respect the user's dietary restrictions`;
 
   const profileSummary = `User Profile:
 - Athlete identity: ${userProfile.athleteIdentity ?? 'Not specified'}
 - Goals: ${userProfile.goals ?? 'Not specified'}
 - Schedule: ${userProfile.schedule ?? 'Not specified'}
 - Injuries/limitations: ${userProfile.injuries ?? 'None reported'}
-- Nutrition: ${userProfile.nutrition ?? 'Not specified'}
+- Diet / food preferences: ${userProfile.diet ?? userProfile.nutrition ?? 'Not specified'}
 
 Full onboarding conversation:
 ${conversationHistory.map(m => `${m.role === 'user' ? 'User' : 'APEX'}: ${m.content}`).join('\n\n')}
