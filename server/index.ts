@@ -283,7 +283,7 @@ Generate the training plan JSON now.`;
     );
     await Progress.findOneAndUpdate(
       { userId: authReq2.userId },
-      { userId: authReq.userId, completedDays: [] },
+      { userId: authReq2.userId, completedDays: [] },
       { upsert: true }
     );
 
