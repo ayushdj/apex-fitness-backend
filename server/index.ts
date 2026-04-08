@@ -266,9 +266,10 @@ Generate the training plan JSON now.`;
 
 // POST /api/chat/complete — non-streaming endpoint for React Native
 app.post('/api/chat/complete', requireAuth, async (req, res) => {
-  const { messages, userProfile } = req.body as {
+  const { messages, userProfile, planContext } = req.body as {
     messages: Message[];
     userProfile?: Record<string, string>;
+    planContext?: string;
   };
 
   if (!messages || messages.length === 0) {
@@ -283,9 +284,16 @@ app.post('/api/chat/complete', requireAuth, async (req, res) => {
 
   const relevantDocs = await retrieve(retrievalQuery, 8);
   const ragContext = formatContext(relevantDocs);
-  const systemWithContext = ragContext
-    ? `${SYSTEM_PROMPT}\n\n─── RELEVANT FITNESS KNOWLEDGE (retrieved for this query) ───\n${ragContext}\n─────────────────────────────────────────────────────────`
-    : SYSTEM_PROMPT;
+
+  const systemWithContext = [
+    SYSTEM_PROMPT,
+    planContext
+      ? `\n\n─── USER'S CURRENT TRAINING PLAN ───\n${planContext}\n─────────────────────────────────────────────────────────`
+      : '',
+    ragContext
+      ? `\n\n─── RELEVANT FITNESS KNOWLEDGE (retrieved for this query) ───\n${ragContext}\n─────────────────────────────────────────────────────────`
+      : '',
+  ].join('');
 
   const authReq = req as AuthRequest;
   if (!(await checkCredits(authReq.userId!))) {
