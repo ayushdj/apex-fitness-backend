@@ -19,7 +19,14 @@ function calcCost(model: string, inputTokens: number, outputTokens: number): num
 
 async function checkCredits(userId: string): Promise<boolean> {
   const user = await User.findById(userId).select('credits').lean();
-  return !!user && (user as any).credits > 0;
+  if (!user) return false;
+  const credits = (user as any).credits;
+  // Pre-existing users won't have credits field — initialize them with $5
+  if (credits === undefined || credits === null) {
+    await User.findByIdAndUpdate(userId, { credits: 5.00, creditsUsed: 0.00 });
+    return true;
+  }
+  return credits > 0;
 }
 
 async function deductCredits(userId: string, cost: number): Promise<void> {
