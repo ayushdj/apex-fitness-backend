@@ -1,16 +1,18 @@
 import os
+
 import httpx
 from fastembed import TextEmbedding
-from fitness_knowledge import FITNESS_KNOWLEDGE
-from nutrition_knowledge import NUTRITION_KNOWLEDGE
+
+from knowledge.fitness import FITNESS_KNOWLEDGE
+from knowledge.nutrition import NUTRITION_KNOWLEDGE
 
 CHROMA_URL = os.getenv("CHROMA_URL", "http://chromadb.railway.internal:8000")
 COLLECTION_NAME = "fitness_knowledge_v2"
 
+ALL_DOCS = FITNESS_KNOWLEDGE + NUTRITION_KNOWLEDGE
+
 _embedder: TextEmbedding | None = None
 _collection_id: str | None = None
-
-ALL_DOCS = FITNESS_KNOWLEDGE + NUTRITION_KNOWLEDGE
 
 
 def _get_embedder() -> TextEmbedding:
@@ -21,8 +23,7 @@ def _get_embedder() -> TextEmbedding:
 
 
 def _embed(texts: list[str]) -> list[list[float]]:
-    embedder = _get_embedder()
-    return [v.tolist() for v in embedder.embed(texts)]
+    return [v.tolist() for v in _get_embedder().embed(texts)]
 
 
 async def _get_or_create_collection() -> str:
@@ -31,14 +32,12 @@ async def _get_or_create_collection() -> str:
         return _collection_id
 
     async with httpx.AsyncClient(timeout=30) as client:
-        # Try to get existing collection
         resp = await client.get(f"{CHROMA_URL}/api/v1/collections/{COLLECTION_NAME}")
         if resp.status_code == 200:
             _collection_id = resp.json()["id"]
             print(f"✓ Using existing ChromaDB collection: {COLLECTION_NAME}")
             return _collection_id
 
-        # Create new collection
         resp = await client.post(
             f"{CHROMA_URL}/api/v1/collections",
             json={"name": COLLECTION_NAME, "metadata": {"hnsw:space": "cosine"}},
@@ -53,7 +52,6 @@ async def build_index() -> None:
     collection_id = await _get_or_create_collection()
 
     async with httpx.AsyncClient(timeout=60) as client:
-        # Check how many docs already exist
         resp = await client.get(f"{CHROMA_URL}/api/v1/collections/{collection_id}/count")
         count = resp.json() if resp.status_code == 200 else 0
 
@@ -63,11 +61,7 @@ async def build_index() -> None:
 
         print(f"  Indexing {len(ALL_DOCS)} documents into ChromaDB...")
 
-        # Build all doc chunks (expand each doc with its tags concatenated)
-        ids = []
-        documents = []
-        metadatas = []
-
+        ids, documents, metadatas = [], [], []
         for doc in ALL_DOCS:
             text = f"{doc['title']}. Tags: {', '.join(doc['tags'])}. {doc['content']}"
             ids.append(doc["id"])
@@ -76,21 +70,15 @@ async def build_index() -> None:
 
         embeddings = _embed(documents)
 
-        # Upsert in batches of 50
         batch_size = 50
         for i in range(0, len(ids), batch_size):
-            batch_ids = ids[i : i + batch_size]
-            batch_docs = documents[i : i + batch_size]
-            batch_meta = metadatas[i : i + batch_size]
-            batch_emb = embeddings[i : i + batch_size]
-
             resp = await client.post(
                 f"{CHROMA_URL}/api/v1/collections/{collection_id}/upsert",
                 json={
-                    "ids": batch_ids,
-                    "documents": batch_docs,
-                    "metadatas": batch_meta,
-                    "embeddings": batch_emb,
+                    "ids": ids[i : i + batch_size],
+                    "documents": documents[i : i + batch_size],
+                    "metadatas": metadatas[i : i + batch_size],
+                    "embeddings": embeddings[i : i + batch_size],
                 },
             )
             resp.raise_for_status()
@@ -115,28 +103,20 @@ async def retrieve(query: str, n_results: int = 8) -> list[dict]:
             return []
 
         data = resp.json()
-        results = []
-        docs = data.get("documents", [[]])[0]
-        metas = data.get("metadatas", [[]])[0]
-        distances = data.get("distances", [[]])[0]
-
-        for doc, meta, dist in zip(docs, metas, distances):
-            results.append({
-                "content": doc,
-                "title": meta.get("title", ""),
-                "score": 1 - dist,  # cosine similarity
-            })
-
-        return results
+        return [
+            {"content": doc, "title": meta.get("title", ""), "score": 1 - dist}
+            for doc, meta, dist in zip(
+                data.get("documents", [[]])[0],
+                data.get("metadatas", [[]])[0],
+                data.get("distances", [[]])[0],
+            )
+        ]
 
 
 def format_context(docs: list[dict]) -> str:
     if not docs:
         return ""
-    parts = []
-    for i, doc in enumerate(docs, 1):
-        parts.append(f"[{i}] {doc['title']}\n{doc['content']}")
-    return "\n\n".join(parts)
+    return "\n\n".join(f"[{i}] {doc['title']}\n{doc['content']}" for i, doc in enumerate(docs, 1))
 
 
 def get_stats() -> dict:

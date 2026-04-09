@@ -2,7 +2,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import Depends, HTTPException, Header
+from fastapi import HTTPException, Header
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 
@@ -12,17 +12,15 @@ SECRET = os.getenv("JWT_SECRET", "changeme")
 ALGORITHM = "HS256"
 EXPIRES_DAYS = 30
 
-pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+_pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-
-# ── Helpers ───────────────────────────────────────────────────────────
 
 def hash_password(plain: str) -> str:
-    return pwd_ctx.hash(plain)
+    return _pwd_ctx.hash(plain)
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_ctx.verify(plain, hashed)
+    return _pwd_ctx.verify(plain, hashed)
 
 
 def create_token(user_id: str, email: str) -> str:
@@ -41,9 +39,8 @@ def decode_token(token: str) -> Optional[dict]:
         return None
 
 
-# ── FastAPI dependency ────────────────────────────────────────────────
-
 async def require_auth(authorization: Optional[str] = Header(None)) -> str:
+    """FastAPI dependency — extracts and validates the Bearer JWT."""
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Unauthorized")
     payload = decode_token(authorization[7:])
@@ -51,8 +48,6 @@ async def require_auth(authorization: Optional[str] = Header(None)) -> str:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     return payload["userId"]
 
-
-# ── Route handlers ────────────────────────────────────────────────────
 
 async def register(body: dict) -> dict:
     name = (body.get("name") or "").strip()
@@ -63,7 +58,6 @@ async def register(body: dict) -> dict:
         raise HTTPException(status_code=400, detail="name, email and password are required")
     if len(password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
-
     if await db.users().find_one({"email": email}):
         raise HTTPException(status_code=409, detail="Email already registered")
 
