@@ -20,10 +20,16 @@ async def api_progress_complete(body: dict, user_id: str = Depends(require_auth)
     if not day_key:
         raise HTTPException(status_code=400, detail="dayKey required")
 
+    workout_data = body.get("workoutData")  # optional: { caloriesBurned, duration, heartRate, workoutType }
+
     oid = ObjectId(user_id)
+    update: dict = {"$addToSet": {"completedDays": day_key}}
+    if workout_data:
+        update["$set"] = {f"workoutData.{day_key}": workout_data}
+
     prog = await db.progress().find_one_and_update(
         {"userId": oid},
-        {"$addToSet": {"completedDays": day_key}},
+        update,
         upsert=True,
         return_document=True,
     )
