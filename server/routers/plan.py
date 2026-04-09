@@ -14,8 +14,9 @@ async def api_plan_generate(body: dict, user_id: str = Depends(require_auth)):
     user_profile = body.get("userProfile", {})
     conversation_history = body.get("conversationHistory", [])
 
-    if not user_profile or not conversation_history:
-        raise HTTPException(status_code=400, detail="userProfile and conversationHistory required")
+    if not user_profile:
+        raise HTTPException(status_code=400, detail="userProfile required")
+    # conversationHistory may be empty when using Quick Setup — that is valid
 
     plan = await generate_plan(user_id, user_profile, conversation_history)
     return {"plan": plan}

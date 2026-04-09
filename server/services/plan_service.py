@@ -80,19 +80,22 @@ Rules:
 
 
 def _build_profile_summary(user_profile: dict, conversation_history: list[dict]) -> str:
-    return (
+    summary = (
         f"User Profile:\n"
         f"- Athlete identity: {user_profile.get('athleteIdentity', 'Not specified')}\n"
         f"- Goals: {user_profile.get('goals', 'Not specified')}\n"
         f"- Schedule: {user_profile.get('schedule', 'Not specified')}\n"
         f"- Injuries/limitations: {user_profile.get('injuries', 'None reported')}\n"
-        f"- Diet / food preferences: {user_profile.get('diet', user_profile.get('nutrition', 'Not specified'))}\n\n"
-        f"Full onboarding conversation:\n"
-        + "\n\n".join(
+        f"- Diet / food preferences: {user_profile.get('diet', user_profile.get('nutrition', 'Not specified'))}\n"
+    )
+    if conversation_history:
+        summary += "\nFull onboarding conversation:\n" + "\n\n".join(
             f"{'User' if m['role'] == 'user' else 'APEX'}: {m['content']}"
             for m in conversation_history
         )
-    )
+    else:
+        summary += "\n(User set up via Quick Setup form — use the profile fields above to generate the plan.)"
+    return summary
 
 
 def _parse_json(res: anthropic.types.Message, label: str) -> dict | None:
