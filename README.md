@@ -73,9 +73,41 @@ cd server && uvicorn main:app --reload --port 3001
 | `MONGODB_URI` | MongoDB Atlas connection string |
 | `ANTHROPIC_API_KEY` | Anthropic API key |
 | `JWT_SECRET` | Secret for signing JWTs |
-| `CHROMA_URL` | ChromaDB URL (Railway internal: `http://chromadb.railway.internal:8000`) |
-| `PORT` | Server port (set automatically by Railway) |
+| `CHROMA_URL` | ChromaDB URL — set automatically to `http://chromadb:8000` in Docker |
 
-## Deployment
+## Deployment (AWS EC2 + Docker Compose)
 
-Deployed on Railway. Pushes to `main` trigger automatic redeployment. Uses a separate ChromaDB service on the same Railway project for the vector store.
+The backend and ChromaDB run as Docker containers on a single EC2 instance (t3.small recommended). ChromaDB data is persisted via a named Docker volume.
+
+### First-time EC2 setup
+
+```bash
+# SSH into your EC2 instance, then run:
+bash <(curl -s https://raw.githubusercontent.com/ayushdj/apex-fitness-backend/main/scripts/setup-ec2.sh)
+
+# Fill in your secrets
+nano ~/apex-fitness-backend/.env
+
+# Start everything
+cd ~/apex-fitness-backend && docker compose up -d --build
+```
+
+### Deploy updates
+
+```bash
+export EC2_HOST=your-ec2-public-ip
+export EC2_USER=ec2-user          # or ubuntu
+export SSH_KEY_PATH=~/.ssh/your-key.pem
+
+./scripts/deploy.sh
+```
+
+This pulls the latest code and restarts the containers with zero manual steps.
+
+### EC2 Security Group
+
+Open these inbound ports:
+- **22** (SSH) — your IP only
+- **8000** (API) — `0.0.0.0/0` (or behind a load balancer)
+
+ChromaDB is not exposed publicly — it only communicates with the API container over Docker's internal network.
