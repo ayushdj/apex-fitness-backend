@@ -155,11 +155,10 @@ app.post('/api/plan/generate', requireAuth, async (req, res) => {
   const relevantDocs = await retrieve(retrievalQuery, 10);
   const ragContext = formatContext(relevantDocs);
 
-  const PLAN_SYSTEM_PROMPT = `You are a JSON-only fitness and nutrition plan generator. You MUST respond with a single valid JSON object and absolutely nothing else — no preamble, no explanation, no markdown fences, no comments. The response must be parseable by JSON.parse() without any preprocessing.
+  // ── Prompt 1: Training plan only (no mealPlan) ──────────────────
+  const TRAINING_PROMPT = `You are a JSON-only training plan generator. Respond with a single valid JSON object only — no markdown, no explanation.
 
-Generate a detailed 2-week training plan (the first 2 weeks of an 8-week program) AND a personalized meal plan based on the user profile provided.
-
-Return EXACTLY this JSON structure:
+Return EXACTLY this structure:
 {
   "planName": string,
   "goal": string,
@@ -176,52 +175,51 @@ Return EXACTLY this JSON structure:
         {
           "dayOfWeek": "Mon",
           "name": string,
-          "type": "strength" | "cardio" | "conditioning" | "rest" | "mobility",
+          "type": "strength"|"cardio"|"conditioning"|"rest"|"mobility",
           "focus": string,
           "durationMinutes": number,
-          "exercises": [
-            { "name": string, "sets": number, "reps": string, "weight": string, "notes": string }
-          ],
+          "exercises": [{ "name": string, "sets": number, "reps": string, "weight": string, "notes": string }],
           "coachTip": string
         }
       ]
     }
-  ],
-  "mealPlan": {
-    "dailyCalories": number,
-    "dietaryPattern": string,
-    "macros": { "proteinG": number, "carbsG": number, "fatG": number },
-    "meals": [
-      {
-        "name": string,
-        "timing": string,
-        "calories": number,
-        "proteinG": number,
-        "options": [string, string]
-      }
-    ],
-    "guidelines": [string, string, string],
-    "avoidList": [string]
-  }
+  ]
 }
 
 Rules:
-- weeks array must contain exactly 2 objects (weekNumber 1 and 2)
-- Each week's days array must contain exactly 7 objects in order: Mon, Tue, Wed, Thu, Fri, Sat, Sun
-- Rest/mobility days must have durationMinutes: 0 and exercises: []
-- Strength and conditioning days must have 4-6 exercises each
-- reps can be strings like "6", "8-10", "AMRAP", "60 sec", "10 each side"
-- weight: use "BW" for bodyweight, "Light" or "Moderate" for relative load, "RPE 7" for autoregulation, or specific lbs if appropriate
-- coachTip must be non-empty for every day including rest days
-- programSummary must describe the full 8-week arc
-- generatedAt must be a valid ISO 8601 timestamp
-- Calibrate everything precisely to the user's experience level, equipment, injuries, and schedule
-- mealPlan.dietaryPattern must reflect the user's diet (e.g. "omnivore", "vegetarian", "vegan", "pescatarian", "gluten-free")
-- mealPlan.meals must have 4-5 entries (Breakfast, Lunch, Dinner, Snack, optional Pre/Post-workout)
-- each meal's options array must have exactly 2 concrete food examples with calorie and protein info in parentheses
-- mealPlan.guidelines must have exactly 3 actionable nutrition tips specific to the user's goal and diet
-- mealPlan.avoidList: 3-5 foods or habits to minimize for this user's specific goal
-- ALL food recommendations must strictly respect the user's dietary restrictions`;
+- weeks array: exactly 2 objects (weekNumber 1 and 2)
+- days array: exactly 7 objects per week in order Mon–Sun
+- Rest/mobility days: durationMinutes 0, exercises []
+- Training days: 4-6 exercises each
+- reps: strings like "6", "8-10", "AMRAP", "60 sec"
+- weight: "BW", "Light", "Moderate", "RPE 7", or specific lbs
+- coachTip: non-empty for every day including rest days
+- programSummary: describes the full 8-week arc
+- generatedAt: valid ISO 8601 timestamp
+- Calibrate precisely to experience level, equipment, injuries, schedule`;
+
+  // ── Prompt 2: Meal plan only ─────────────────────────────────────
+  const MEAL_PROMPT = `You are a JSON-only nutrition planner. Respond with a single valid JSON object only — no markdown, no explanation.
+
+Return EXACTLY this structure:
+{
+  "dailyCalories": number,
+  "dietaryPattern": string,
+  "macros": { "proteinG": number, "carbsG": number, "fatG": number },
+  "meals": [
+    { "name": string, "timing": string, "calories": number, "proteinG": number, "options": [string, string] }
+  ],
+  "guidelines": [string, string, string],
+  "avoidList": [string, string, string]
+}
+
+Rules:
+- dietaryPattern: reflects user's diet ("omnivore","vegetarian","vegan","pescatarian", etc.)
+- meals: 4-5 entries covering Breakfast, Lunch, Dinner, Snack, and optionally Pre/Post-workout
+- each options array: exactly 2 concrete food examples with calorie and protein info in parentheses
+- guidelines: exactly 3 actionable nutrition tips for this user's goal and diet
+- avoidList: exactly 3 foods or habits to minimize
+- ALL recommendations must strictly respect dietary restrictions`;
 
   const profileSummary = `User Profile:
 - Athlete identity: ${userProfile.athleteIdentity ?? 'Not specified'}
@@ -231,49 +229,76 @@ Rules:
 - Diet / food preferences: ${userProfile.diet ?? userProfile.nutrition ?? 'Not specified'}
 
 Full onboarding conversation:
-${conversationHistory.map(m => `${m.role === 'user' ? 'User' : 'APEX'}: ${m.content}`).join('\n\n')}
+${conversationHistory.map(m => `${m.role === 'user' ? 'User' : 'APEX'}: ${m.content}`).join('\n\n')}`;
 
-Generate the training plan JSON now.`;
+  const trainingSystemPrompt = ragContext
+    ? `${TRAINING_PROMPT}\n\nRelevant fitness knowledge:\n${ragContext}`
+    : TRAINING_PROMPT;
 
-  const systemWithContext = ragContext
-    ? `${PLAN_SYSTEM_PROMPT}\n\nRelevant fitness knowledge:\n${ragContext}`
-    : PLAN_SYSTEM_PROMPT;
+  const mealSystemPrompt = ragContext
+    ? `${MEAL_PROMPT}\n\nRelevant nutrition knowledge:\n${ragContext}`
+    : MEAL_PROMPT;
 
   const authReq2 = req as AuthRequest;
   if (!(await checkCredits(authReq2.userId!))) {
     return res.status(402).json({ error: 'out_of_credits', message: 'You have used all your free credits. Please add more to continue.' });
   }
 
+  function stripFences(raw: string) {
+    return raw.replace(/^```(?:json)?[\r\n]*/i, '').replace(/[\r\n]*```\s*$/i, '').trim();
+  }
+
+  function parseJSON(raw: string, label: string) {
+    const text = stripFences(raw);
+    try {
+      return JSON.parse(text);
+    } catch {
+      console.error(`${label} JSON parse failed:`, raw.slice(0, 300));
+      return null;
+    }
+  }
+
   try {
     const model = 'claude-haiku-4-5';
-    const response = await anthropic.messages.create({
-      model,
-      max_tokens: 8000,
-      system: systemWithContext,
-      messages: [{ role: 'user', content: profileSummary }],
-    });
 
-    const rawText = response.content[0].type === 'text' ? response.content[0].text : '';
-    // Strip markdown code fences Claude sometimes adds despite instructions
-    const jsonText = rawText
-      .replace(/^```(?:json)?[\r\n]*/i, '')
-      .replace(/[\r\n]*```\s*$/i, '')
-      .trim();
+    // Run both calls in parallel
+    const [trainingRes, mealRes] = await Promise.all([
+      anthropic.messages.create({
+        model,
+        max_tokens: 8000,
+        system: trainingSystemPrompt,
+        messages: [{ role: 'user', content: `${profileSummary}\n\nGenerate the training plan JSON now.` }],
+      }),
+      anthropic.messages.create({
+        model,
+        max_tokens: 2000,
+        system: mealSystemPrompt,
+        messages: [{ role: 'user', content: `${profileSummary}\n\nGenerate the meal plan JSON now.` }],
+      }),
+    ]);
 
-    let plan;
-    try {
-      plan = JSON.parse(jsonText);
-    } catch {
-      console.error('Plan JSON parse failed:', rawText.slice(0, 500));
+    const plan = parseJSON(
+      trainingRes.content[0].type === 'text' ? trainingRes.content[0].text : '',
+      'Training plan'
+    );
+    if (!plan) {
       return res.status(500).json({ error: 'Plan generation produced invalid JSON. Please retry.' });
     }
+
+    const mealPlan = parseJSON(
+      mealRes.content[0].type === 'text' ? mealRes.content[0].text : '',
+      'Meal plan'
+    );
+    if (mealPlan) plan.mealPlan = mealPlan;
 
     if (!plan.generatedAt || plan.generatedAt.includes('<') || plan.generatedAt.includes('ISO')) {
       plan.generatedAt = new Date().toISOString();
     }
 
-    const planCost = calcCost(model, response.usage.input_tokens, response.usage.output_tokens);
-    await deductCredits(authReq2.userId!, planCost);
+    const totalCost =
+      calcCost(model, trainingRes.usage.input_tokens, trainingRes.usage.output_tokens) +
+      calcCost(model, mealRes.usage.input_tokens,  mealRes.usage.output_tokens);
+    await deductCredits(authReq2.userId!, totalCost);
 
     // Auto-save to MongoDB
     await Plan.findOneAndUpdate(
