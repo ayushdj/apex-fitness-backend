@@ -17,6 +17,13 @@ Your role is to:
 4. Adjust plans based on feedback, recovery data, or goal changes
 5. Explain the "why" behind recommendations
 
+Scope rules (strictly enforced):
+- You ONLY answer questions related to fitness, exercise, training, nutrition, diet, recovery, sleep, and physical health.
+- If the user asks about ANYTHING outside these topics — politics, coding, relationships, general knowledge, entertainment, finance, or any other unrelated subject — respond with exactly this and nothing more:
+  "I'm APEX, your fitness coach — I can only help with training, nutrition, and health topics. What fitness goal can I help you with today?"
+- Do not apologise excessively. Do not engage with the off-topic subject at all. Just redirect once, clearly.
+- Borderline topics like mental health as it relates to exercise, sleep quality, or stress management ARE within scope.
+
 Style rules:
 - Be conversational, not clinical. Sound like a coach, not a textbook.
 - Use specific exercise names and rep schemes, not vague guidance.
@@ -39,11 +46,25 @@ def _build_system(rag_ctx: str = "", plan_context: str = "") -> str:
     return "".join(parts)
 
 
-async def _build_rag_context(messages: list[dict], user_profile: dict) -> str:
+OFF_TOPIC_REPLY = "I'm APEX, your fitness coach — I can only help with training, nutrition, and health topics. What fitness goal can I help you with today?"
+
+# Minimum cosine similarity for a query to be considered fitness-related.
+# Scores below this threshold mean the query has no meaningful match in the
+# fitness/nutrition knowledge base and is almost certainly off-topic.
+RAG_RELEVANCE_THRESHOLD = 0.25
+
+
+async def _build_rag_context(messages: list[dict], user_profile: dict) -> tuple[str, bool]:
+    """Returns (rag_context, is_on_topic)."""
     latest = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
     profile_ctx = ", ".join(f"{k}: {v}" for k, v in (user_profile or {}).items())
     docs = await retrieve(f"{latest} {profile_ctx}", n_results=8)
-    return format_context(docs)
+
+    # If the best-matching doc scores below the threshold the query is off-topic
+    if docs and docs[0]["score"] < RAG_RELEVANCE_THRESHOLD:
+        return "", False
+
+    return format_context(docs), True
 
 
 async def stream_chat(
@@ -51,7 +72,13 @@ async def stream_chat(
     user_profile: dict,
 ) -> AsyncIterator[str]:
     """Yields SSE-formatted data strings for the streaming chat endpoint."""
-    rag_ctx = await _build_rag_context(messages, user_profile)
+    rag_ctx, on_topic = await _build_rag_context(messages, user_profile)
+
+    if not on_topic:
+        yield f"data: {{'text': {repr(OFF_TOPIC_REPLY)}}}\n\n"
+        yield "data: [DONE]\n\n"
+        return
+
     system = _build_system(rag_ctx=rag_ctx)
 
     try:
@@ -83,7 +110,12 @@ async def complete_chat(
             detail={"error": "out_of_credits", "message": "You have used all your free credits."},
         )
 
-    rag_ctx = await _build_rag_context(messages, user_profile)
+    rag_ctx, on_topic = await _build_rag_context(messages, user_profile)
+
+    # Return the off-topic reply without consuming credits
+    if not on_topic:
+        return OFF_TOPIC_REPLY
+
     system = _build_system(rag_ctx=rag_ctx, plan_context=plan_context)
 
     model = "claude-opus-4-6"
