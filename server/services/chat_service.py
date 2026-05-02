@@ -1,3 +1,4 @@
+import json
 import os
 from typing import AsyncIterator
 
@@ -75,7 +76,7 @@ async def stream_chat(
     rag_ctx, on_topic = await _build_rag_context(messages, user_profile)
 
     if not on_topic:
-        yield f"data: {{'text': {repr(OFF_TOPIC_REPLY)}}}\n\n"
+        yield f"data: {json.dumps({'text': OFF_TOPIC_REPLY})}\n\n"
         yield "data: [DONE]\n\n"
         return
 
@@ -89,10 +90,10 @@ async def stream_chat(
             messages=[{"role": m["role"], "content": m["content"]} for m in messages],
         ) as stream:
             for text in stream.text_stream:
-                yield f"data: {{'text': {repr(text)}}}\n\n"
+                yield f"data: {json.dumps({'text': text})}\n\n"
         yield "data: [DONE]\n\n"
     except Exception as e:
-        yield f"data: {{'error': {repr(str(e))}}}\n\n"
+        yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
 
 async def complete_chat(
